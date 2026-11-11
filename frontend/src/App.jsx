@@ -1,7 +1,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import { supabase } from "./supabase";
 
 const socket = io(
   import.meta.env.VITE_BACKEND_URL || "http://localhost:3000"
@@ -23,12 +22,17 @@ function App() {
   const photoRef = useRef(null);
   const videoRef = useRef(null);
   const recorderRef = useRef(null);
+  const fluxRef = useRef(null);
   const morceauxRef = useRef([]);
 
+  // Connexion et réception des messages
   useEffect(() => {
     function connexion() {
       setServeurEnLigne(true);
-      if (connecte && pseudo) socket.emit("rejoindre", pseudo);
+
+      if (connecte && pseudo) {
+        socket.emit("rejoindre", pseudo);
+      }
     }
 
     function deconnexion() {
@@ -66,7 +70,10 @@ function App() {
 
     if (socket.connected) {
       setServeurEnLigne(true);
-      if (connecte && pseudo) socket.emit("rejoindre", pseudo);
+
+      if (connecte && pseudo) {
+        socket.emit("rejoindre", pseudo);
+      }
     }
 
     return () => {
@@ -79,8 +86,10 @@ function App() {
     };
   }, [connecte, pseudo]);
 
+  // Rejoindre le chat
   function rejoindreChat(e) {
     e.preventDefault();
+
     const nom = pseudo.trim();
 
     if (!nom || !serveurEnLigne) return;
@@ -90,12 +99,10 @@ function App() {
     socket.emit("rejoindre", nom);
   }
 
+  // Envoyer un message public ou privé
   function envoyerDonnees(donnees) {
     if (conversation === "general") {
-      socket.emit("message", {
-        pseudo,
-        ...donnees
-      });
+      socket.emit("message", donnees);
     } else {
       socket.emit("message-prive", {
         vers: conversation,
@@ -117,76 +124,66 @@ function App() {
     setTexte("");
   }
 
-  // Envoyer une photo, une vidéo ou un audio vers Supabase
-  async function envoyerMedia(fichier, type) {
-    if (!fichier || !supabase) {
-      setErreur(
-        "Configure d'abord Supabase dans le fichier .env."
-      );
+  // Envoyer une photo, une vidéo ou un vocal sans Supabase
+  function envoyerMedia(fichier, type) {
+    if (!fichier || !socket.connected) {
+      setErreur("Connexion au serveur indisponible.");
       return;
     }
 
     const limites = {
-      image: 10 * 1024 * 1024,
-      video: 50 * 1024 * 1024,
-      audio: 10 * 1024 * 1024
+      image: 1.5 * 1024 * 1024,
+      video: 3.5 * 1024 * 1024,
+      audio: 1.5 * 1024 * 1024
     };
 
     if (fichier.size > limites[type]) {
-      setErreur("Fichier trop volumineux pour cette version.");
+      setErreur("Fichier trop volumineux. Réduis sa taille.");
       return;
     }
 
     setErreur("");
     setEnvoiEnCours(true);
 
-    try {
-      const extension =
-        fichier.name.split(".").pop() || type;
+    const lecteur = new FileReader();
 
-      const chemin =
-        `${socket.id}/${Date.now()}-${Math.random()
-          .toString(36).slice(2)}.${extension}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("inspirechat-media")
-        .upload(chemin, fichier, {
-          contentType: fichier.type,
-          upsert: false
-        });
-
-      if (uploadError) throw uploadError;
-
-      const { data } = supabase.storage
-        .from("inspirechat-media")
-        .getPublicUrl(chemin);
-
+    lecteur.onload = () => {
       envoyerDonnees({
         type,
         texte: "",
-        mediaUrl: data.publicUrl,
+        mediaUrl: lecteur.result,
         fileName: fichier.name
       });
-    } catch (error) {
-      console.error(error);
-      setErreur("Impossible d'envoyer ce fichier. Vérifie Supabase.");
-    } finally {
+
       setEnvoiEnCours(false);
-    }
+    };
+
+    lecteur.onerror = () => {
+      setErreur("Impossible de lire ce fichier.");
+      setEnvoiEnCours(false);
+    };
+
+    lecteur.readAsDataURL(fichier);
   }
 
   function choisirFichier(e, type) {
     const fichier = e.target.files?.[0];
-    if (fichier) envoyerMedia(fichier, type);
+
+    if (fichier) {
+      envoyerMedia(fichier, type);
+    }
+
     e.target.value = "";
   }
 
-  // Enregistrement d'un message vocal
+  // Enregistrer un message vocal
   async function commencerVocal() {
     setErreur("");
 
-    if (!navigator.mediaDevices?.getUserMedia ||
-        !window.MediaRecorder) {
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      !window.MediaRecorder
+    ) {
       setErreur("Ton navigateur ne permet pas l'enregistrement vocal.");
       return;
     }
@@ -196,7 +193,10 @@ function App() {
         audio: true
       });
 
+      fluxRef.current = flux;
+
       const recorder = new MediaRecorder(flux);
+
       recorderRef.current = recorder;
       morceauxRef.current = [];
 
@@ -212,6 +212,7 @@ function App() {
         });
 
         flux.getTracks().forEach((track) => track.stop());
+        fluxRef.current = null;
 
         if (audio.size > 0) {
           const fichier = new File(
@@ -220,7 +221,7 @@ function App() {
             { type: audio.type }
           );
 
-          await envoyerMedia(fichier, "audio");
+          envoyerMedia(fichier, "audio");
         }
       };
 
@@ -228,7 +229,7 @@ function App() {
       setEnregistrement(true);
     } catch (error) {
       console.error(error);
-      setErreur("Autorise l'accès au microphone pour enregistrer.");
+      setErreur("Autorise l'accès au microphone.");
     }
   }
 
@@ -257,6 +258,7 @@ function App() {
       ? "Salon général"
       : contact?.pseudo || "Conversation privée";
 
+  // Afficher le contenu d'un message
   function afficherContenu(message) {
     if (message.type === "image" && message.mediaUrl) {
       return (
@@ -291,6 +293,7 @@ function App() {
     return <p className="break-words">{message.texte}</p>;
   }
 
+  // Écran de connexion
   if (!connecte) {
     return (
       <div className="min-h-screen bg-[#17121A] flex items-center justify-center p-5 text-white">
@@ -332,13 +335,16 @@ function App() {
           </button>
 
           <p className="text-center text-xs text-gray-500 mt-6">
-            {serveurEnLigne ? "● Serveur connecté" : "● Connexion au serveur..."}
+            {serveurEnLigne
+              ? "● Serveur connecté"
+              : "● Connexion au serveur..."}
           </p>
         </form>
       </div>
     );
   }
 
+  // Interface principale
   return (
     <div className="min-h-screen bg-[#17121A] text-white flex">
       <aside className="w-20 md:w-80 bg-[#241522] border-r border-pink-900/30 flex flex-col shrink-0">
@@ -347,6 +353,7 @@ function App() {
             <span className="hidden md:inline">Inspire</span>
             <span className="text-[#F06CBA]">Chat</span>
           </h1>
+
           <p className="hidden md:block text-gray-400 text-sm mt-2">
             Partage tes idées librement.
           </p>
@@ -368,9 +375,12 @@ function App() {
             <div className="w-10 h-10 shrink-0 rounded-full bg-[#F06CBA] flex items-center justify-center text-xl">
               💬
             </div>
+
             <div className="hidden md:block">
               <p className="font-semibold">Salon général</p>
-              <p className="text-xs text-gray-400">Discussion publique</p>
+              <p className="text-xs text-gray-400">
+                Discussion publique
+              </p>
             </div>
           </button>
 
@@ -397,8 +407,10 @@ function App() {
                 <div className="w-10 h-10 rounded-full bg-[#302631] border border-[#F06CBA]/40 flex items-center justify-center font-bold text-[#F06CBA]">
                   {u.pseudo.charAt(0).toUpperCase()}
                 </div>
+
                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-400 border-2 border-[#241522] rounded-full" />
               </div>
+
               <div className="hidden md:block min-w-0">
                 <p className="font-semibold truncate">{u.pseudo}</p>
                 <p className="text-xs text-green-400">En ligne</p>
@@ -412,6 +424,7 @@ function App() {
             <div className="w-10 h-10 shrink-0 rounded-full bg-[#F06CBA] text-[#241522] flex items-center justify-center font-bold">
               {pseudo.charAt(0).toUpperCase()}
             </div>
+
             <div className="hidden md:block min-w-0">
               <p className="font-semibold truncate">{pseudo}</p>
               <p className="text-xs text-green-400">
@@ -425,13 +438,19 @@ function App() {
       <main className="flex-1 flex flex-col min-h-screen min-w-0">
         <header className="bg-[#241522] border-b border-pink-900/30 p-4 md:p-6 flex items-center justify-between">
           <div className="min-w-0">
-            <h2 className="text-lg md:text-xl font-bold truncate">{titre}</h2>
+            <h2 className="text-lg md:text-xl font-bold truncate">
+              {titre}
+            </h2>
+
             <p className="text-xs text-gray-400 mt-1">
-              {conversation === "general" ? "Discussion publique" : "🔒 Conversation privée"}
+              {conversation === "general"
+                ? "Discussion publique"
+                : "🔒 Conversation privée"}
               {" · "}
               {serveurEnLigne ? "Connecté" : "Connexion perdue"}
             </p>
           </div>
+
           <div className="hidden sm:block bg-[#F06CBA]/15 text-[#F06CBA] px-3 py-2 rounded-full text-xs">
             ✨ InspireChat
           </div>
@@ -449,8 +468,12 @@ function App() {
           {messagesAffiches.length === 0 ? (
             <div className="text-center mt-20">
               <div className="text-5xl mb-4">💌</div>
-              <h3 className="text-lg font-semibold">Aucun message pour le moment</h3>
-              <p className="text-sm text-gray-500 mt-2">Lance la discussion !</p>
+              <h3 className="text-lg font-semibold">
+                Aucun message pour le moment
+              </h3>
+              <p className="text-sm text-gray-500 mt-2">
+                Lance la discussion !
+              </p>
             </div>
           ) : (
             messagesAffiches.map((message) => {
@@ -462,7 +485,9 @@ function App() {
               return (
                 <div
                   key={message.id}
-                  className={`flex ${estMonMessage ? "justify-end" : "justify-start"}`}
+                  className={`flex ${
+                    estMonMessage ? "justify-end" : "justify-start"
+                  }`}
                 >
                   <div
                     className={`max-w-[85%] md:max-w-[65%] p-4 rounded-2xl space-y-2 ${
@@ -471,9 +496,13 @@ function App() {
                         : "bg-[#302631] text-white rounded-bl-sm"
                     }`}
                   >
-                    <p className={`text-xs font-bold ${
-                      estMonMessage ? "text-[#6E254F]" : "text-[#F06CBA]"
-                    }`}>
+                    <p
+                      className={`text-xs font-bold ${
+                        estMonMessage
+                          ? "text-[#6E254F]"
+                          : "text-[#F06CBA]"
+                      }`}
+                    >
                       {estMonMessage ? "Toi" : message.pseudo}
                     </p>
 
@@ -494,7 +523,9 @@ function App() {
 
         <footer className="p-3 md:p-6 bg-[#241522] border-t border-pink-900/30">
           {erreur && (
-            <p className="text-sm text-red-400 mb-3 text-center">{erreur}</p>
+            <p className="text-sm text-red-400 mb-3 text-center">
+              {erreur}
+            </p>
           )}
 
           <div className="flex items-center gap-2 max-w-5xl mx-auto">
@@ -548,7 +579,10 @@ function App() {
               {enregistrement ? "⏹️" : "🎙️"}
             </button>
 
-            <form onSubmit={envoyerMessage} className="flex gap-2 flex-1 min-w-0">
+            <form
+              onSubmit={envoyerMessage}
+              className="flex gap-2 flex-1 min-w-0"
+            >
               <input
                 type="text"
                 placeholder="Écris ton message..."
