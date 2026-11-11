@@ -2,20 +2,19 @@
 import { useState, useEffect } from "react";
 import { io } from "socket.io-client";
 
-// Connexion au serveur
-const socket = io("http://localhost:3000");
+// Connexion au backend Render ou au serveur local
+const socket = io(
+    import.meta.env.VITE_BACKEND_URL || "http://localhost:3000"
+);
 
 function App() {
-
     const [pseudo, setPseudo] = useState("");
     const [texte, setTexte] = useState("");
     const [messages, setMessages] = useState([]);
-
     const [connecte, setConnecte] = useState(false);
 
-    // Recevoir les messages
+    // Recevoir les messages envoyés par tous les utilisateurs
     useEffect(() => {
-
         function recevoirMessage(message) {
             setMessages((anciensMessages) => [
                 ...anciensMessages,
@@ -28,18 +27,19 @@ function App() {
         return () => {
             socket.off("message", recevoirMessage);
         };
-
     }, []);
 
-    // Se connecter avec un pseudo
+    // Rejoindre le chat avec un pseudo
     function rejoindreChat(e) {
         e.preventDefault();
 
-        if (pseudo.trim() === "") {
+        const pseudoPropre = pseudo.trim();
+
+        if (pseudoPropre === "") {
             return;
         }
 
-        setPseudo(pseudo.trim());
+        setPseudo(pseudoPropre);
         setConnecte(true);
     }
 
@@ -47,13 +47,15 @@ function App() {
     function envoyerMessage(e) {
         e.preventDefault();
 
-        if (texte.trim() === "") {
+        const textePropre = texte.trim();
+
+        if (textePropre === "") {
             return;
         }
 
         socket.emit("message", {
             pseudo: pseudo,
-            texte: texte.trim()
+            texte: textePropre
         });
 
         setTexte("");
@@ -82,7 +84,6 @@ function App() {
                         onSubmit={rejoindreChat}
                         className="p-8 flex flex-col gap-5"
                     >
-
                         <h2 className="text-xl font-semibold">
                             Bienvenue sur InspireChat
                         </h2>
@@ -105,7 +106,6 @@ function App() {
                         >
                             Rejoindre le chat
                         </button>
-
                     </form>
 
                 ) : (
